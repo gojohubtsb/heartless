@@ -1,0 +1,247 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>GlassVault | Hyper-Sync</title>
+    <style>
+        :root {
+            --bg: #010409;
+            --accent: #00d4ff;
+            --glass: rgba(255, 255, 255, 0.03);
+            --border: rgba(255, 255, 255, 0.1);
+        }
+
+        * { margin: 0; padding: 0; box-sizing: border-box; font-family: 'Inter', sans-serif; }
+
+        body {
+            background-color: var(--bg);
+            background-image: 
+                radial-gradient(at 0% 0%, rgba(0, 212, 255, 0.15) 0px, transparent 50%),
+                radial-gradient(at 100% 100%, rgba(157, 0, 255, 0.1) 0px, transparent 50%);
+            height: 100vh; color: white; display: flex; align-items: center; justify-content: center; overflow: hidden;
+        }
+
+        /* Permission & Landing Overlays */
+        .overlay {
+            position: fixed; inset: 0; z-index: 1000;
+            background: rgba(1, 4, 9, 0.8); backdrop-filter: blur(60px); -webkit-backdrop-filter: blur(60px);
+            display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center;
+        }
+
+        .glass-card {
+            background: var(--glass); border: 1px solid var(--border);
+            padding: 40px; border-radius: 35px; box-shadow: 0 25px 50px rgba(0,0,0,0.8); width: 450px;
+        }
+
+        /* App Layout */
+        #app {
+            display: none; width: 96vw; height: 94vh; max-width: 1500px;
+            background: var(--glass); backdrop-filter: blur(25px); -webkit-backdrop-filter: blur(25px);
+            border: 1px solid var(--border); border-radius: 40px;
+            grid-template-columns: 320px 1fr; overflow: hidden; position: relative;
+        }
+
+        .sidebar { background: rgba(0,0,0,0.4); border-right: 1px solid var(--border); display: flex; flex-direction: column; }
+        .note-list { flex: 1; overflow-y: auto; padding: 15px; }
+        .note-item {
+            padding: 20px; border-radius: 18px; margin-bottom: 10px; cursor: pointer;
+            background: rgba(255,255,255,0.02); transition: 0.1s; border: 1px solid transparent;
+        }
+        .note-item.active { background: rgba(255,255,255,0.08); border-color: var(--accent); box-shadow: 0 0 15px rgba(0, 212, 255, 0.2); }
+
+        .editor { padding: 80px; display: flex; flex-direction: column; position: relative; }
+        #title-in { background: transparent; border: none; color: white; font-size: 3.5rem; font-weight: 900; outline: none; margin-bottom: 20px; letter-spacing: -2px; }
+        #body-in { background: transparent; border: none; color: #cbd5e1; font-size: 1.4rem; line-height: 1.8; outline: none; resize: none; flex: 1; }
+
+        /* Aggressive Sync Guard */
+        #sync-guard {
+            position: absolute; inset: 0; z-index: 9999;
+            background: rgba(0,0,0,0.6); backdrop-filter: blur(25px); -webkit-backdrop-filter: blur(25px);
+            display: none; flex-direction: column; align-items: center; justify-content: center;
+        }
+
+        /* Controls */
+        .btn {
+            background: white; color: black; border: none; padding: 16px 32px;
+            border-radius: 15px; font-weight: 800; cursor: pointer; transition: 0.2s; width: 100%;
+        }
+        .btn-sync { background: var(--accent); color: #000; margin-top: 20px; box-shadow: 0 0 30px rgba(0, 212, 255, 0.4); }
+        .btn:active { transform: scale(0.98); }
+
+        .status-pill {
+            position: absolute; bottom: 40px; right: 50px;
+            padding: 8px 18px; border-radius: 25px; font-size: 0.65rem; font-weight: 900;
+            background: rgba(0, 212, 255, 0.1); color: var(--accent);
+            border: 1px solid var(--accent); letter-spacing: 2px;
+        }
+
+        .saving-glow { animation: save-glow 0.1s infinite; }
+        @keyframes save-glow { 0% { opacity: 1; } 50% { opacity: 0.5; } 100% { opacity: 1; } }
+    </style>
+</head>
+<body>
+
+    <!-- Landing -->
+    <div id="landing-screen" class="overlay">
+        <div class="glass-card">
+            <h1 style="font-size: 3rem; margin-bottom: 10px; letter-spacing: -2px;">GlassVault</h1>
+            <p style="opacity: 0.6; margin-bottom: 30px;">Singular Save File Protocol.</p>
+            <button class="btn" onclick="initVault(true)">+ Create Singular Save File</button>
+            <button class="btn" style="margin-top:10px; background:transparent; color:white; border:1px solid var(--border)" onclick="initVault(false)">Load Your Save File</button>
+        </div>
+    </div>
+
+    <!-- App Interface -->
+    <div id="app">
+        <div id="sync-guard">
+            <div class="glass-card">
+                <h2 style="color: var(--accent);">SYNC PAUSED</h2>
+                <p style="margin: 15px 0;">Authorize background updates for your singular save file:</p>
+                <div id="file-name" style="font-family: monospace; background: rgba(0,0,0,0.3); padding: 10px; border-radius: 10px; margin-bottom: 20px;">Filename.glass</div>
+                <button class="btn btn-sync" onclick="requestPermission()">AUTHORIZE SINGULAR SYNC</button>
+            </div>
+        </div>
+
+        <aside class="sidebar">
+            <div style="padding: 30px;"><button class="btn" onclick="addNewNote()">+ NEW NOTE</button></div>
+            <div id="note-list" class="note-list"></div>
+        </aside>
+
+        <main class="editor">
+            <input type="text" id="title-in" placeholder="Untitled">
+            <textarea id="body-in" placeholder="Every millisecond is saved to your hardware..."></textarea>
+            <div class="status-pill" id="sync-pill">LIVE SYNC ACTIVE</div>
+        </main>
+    </div>
+
+    <script>
+        let fileHandle = null;
+        let notes = [];
+        let activeNoteId = null;
+        let isWriting = false;
+        let needsSave = false;
+
+        // 1. Start App
+        async function initVault(isNew) {
+            try {
+                if (isNew) {
+                    fileHandle = await window.showSaveFilePicker({
+                        suggestedName: 'vault.glass',
+                        types: [{ description: 'GlassVault Save', accept: {'application/json': ['.glass']} }]
+                    });
+                    notes = [{ id: Date.now(), title: "Live Sync", content: "This file is now linked.", time: Date.now() }];
+                    await writeToDisk();
+                } else {
+                    [fileHandle] = await window.showOpenFilePicker();
+                    const file = await fileHandle.getFile();
+                    notes = JSON.parse(await file.text());
+                }
+
+                document.getElementById('file-name').innerText = fileHandle.name;
+                document.getElementById('landing-screen').style.display = 'none';
+                document.getElementById('app').style.display = 'grid';
+                
+                renderList();
+                if(notes.length > 0) selectNote(notes[0].id);
+                
+                // Aggressive Permission Loop
+                permissionLoop();
+                // Hyper-Save Loop
+                saveLoop();
+
+            } catch (err) { console.log(err); }
+        }
+
+        // 2. Aggressive Permission System
+        async function permissionLoop() {
+            if (!fileHandle) return;
+            const status = await fileHandle.queryPermission({ mode: 'readwrite' });
+            
+            if (status === 'granted') {
+                document.getElementById('sync-guard').style.display = 'none';
+            } else {
+                document.getElementById('sync-guard').style.display = 'flex';
+            }
+            setTimeout(permissionLoop, 500); // Check twice a second
+        }
+
+        async function requestPermission() {
+            const result = await fileHandle.requestPermission({ mode: 'readwrite' });
+            if (result === 'granted') writeToDisk();
+        }
+
+        // 3. Millisecond Saving Logic (The Hyper-Save Engine)
+        function triggerImmediateSave() {
+            const note = notes.find(n => n.id === activeNoteId);
+            if (note) {
+                note.title = document.getElementById('title-in').value;
+                note.content = document.getElementById('body-in').value;
+                note.time = Date.now();
+            }
+            needsSave = true; // Flag that data has changed
+        }
+
+        async function saveLoop() {
+            if (needsSave && !isWriting) {
+                await writeToDisk();
+            }
+            // Use requestAnimationFrame for millisecond-level reaction
+            requestAnimationFrame(saveLoop);
+        }
+
+        async function writeToDisk() {
+            if (!fileHandle) return;
+            isWriting = true;
+            needsSave = false;
+            
+            const pill = document.getElementById('sync-pill');
+            pill.innerText = "WRITING...";
+            pill.classList.add('saving-glow');
+
+            try {
+                const writable = await fileHandle.createWritable();
+                await writable.write(JSON.stringify(notes));
+                await writable.close();
+                pill.innerText = "LIVE SYNC ACTIVE";
+            } catch (err) {
+                console.error("Write error");
+            } finally {
+                isWriting = false;
+                pill.classList.remove('saving-glow');
+            }
+        }
+
+        // 4. UI Support
+        function renderList() {
+            const list = document.getElementById('note-list');
+            list.innerHTML = '';
+            notes.sort((a,b) => b.time - a.time).forEach(n => {
+                const item = document.createElement('div');
+                item.className = `note-item ${n.id === activeNoteId ? 'active' : ''}`;
+                item.innerHTML = `<strong>${n.title || 'Untitled'}</strong>`;
+                item.onclick = () => selectNote(n.id);
+                list.appendChild(item);
+            });
+        }
+
+        function selectNote(id) {
+            activeNoteId = id;
+            const note = notes.find(n => n.id === id);
+            document.getElementById('title-in').value = note.title;
+            document.getElementById('body-in').value = note.content;
+            renderList();
+        }
+
+        function addNewNote() {
+            const n = { id: Date.now(), title: "New Note", content: "", time: Date.now() };
+            notes.unshift(n);
+            selectNote(n.id);
+            triggerImmediateSave();
+        }
+
+        document.getElementById('title-in').oninput = triggerImmediateSave;
+        document.getElementById('body-in').oninput = triggerImmediateSave;
+
+    </script>
+</body>
+</html>
